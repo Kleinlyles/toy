@@ -1,2 +1,2 @@
-# TOY
+# toy
 a self-testing
