@@ -400,22 +400,22 @@
       }
     });
 
-    // ================= 2. 原厂满血蓝牙指令 (反编译 Dalvik 字节码真身) =================
-    // 官方协议格式：严格 7 字节！
-    // 帧结构: [0x55, Opcode, 0x00, 0x00, Mode, Intensity, 0x00]
-    // 振动 Opcode: 0x03
-    // 拍打 Opcode: 0x07
-    // 吮吸 Opcode: 0x09
+    // ================= 2. 硬件控制与心跳守护 =================
     const OP_VIBE = 0x03;
     const OP_FLAP = 0x07;
     const OP_SUCK = 0x09;
 
     const FFE0_SERVICE = "0000ffe0-0000-1000-8000-00805f9b34fb";
     const FFE1_CHAR = "0000ffe1-0000-1000-8000-00805f9b34fb";
+    const FFE2_CHAR = "0000ffe2-0000-1000-8000-00805f9b34fb";
 
     let bleDevice = null;
     let bleServer = null;
     let txChar = null;
+    let rxChar = null;
+    let heartbeatInterval = null;
+    let isWriting = false;
+    let pendingWrite = null;
 
     let state = {
       suck: { on: false, mode: 1, intensity: 40 },
@@ -427,6 +427,25 @@
     const statusText = document.getElementById("statusText");
     const btnConnect = document.getElementById("btnConnect");
     const btnEmergencyStop = document.getElementById("btnEmergencyStop");
+
+    // 核心心跳守护：每 1200ms 发送原厂状态查询包，防止单片机静默断电
+    function startHeartbeat() {
+      stopHeartbeat();
+      heartbeatInterval = setInterval(async () => {
+        if (txChar && bleDevice && bleDevice.gatt.connected) {
+          try {
+            await sendRawBytes([0x55, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00]);
+          } catch (e) {}
+        }
+      }, 1200);
+    }
+
+    function stopHeartbeat() {
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
+    }
 
     btnConnect.addEventListener("click", async () => {
       try {
@@ -445,8 +464,30 @@
         const service = await bleServer.getPrimaryService(FFE0_SERVICE);
         txChar = await service.getCharacteristic(FFE1_CHAR);
 
+        // 1. 开启 FFE2 原厂通知监听
+        try {
+          rxChar = await service.getCharacteristic(FFE2_CHAR);
+          await rxChar.startNotifications();
+          rxChar.addEventListener('characteristicvaluechanged', (e) => {
+            const v = new Uint8Array(e.target.value.buffer);
+            // 若包含电量信息，显示在状态栏
+            if (v.length >= 5 && v[0] === 0x55) {
+              const batt = v[4] || v[3] || 100;
+              if (batt <= 100) {
+                statusText.innerText = `已就绪 (🔋${batt}%)`;
+              }
+            }
+          });
+        } catch (e) {
+          console.warn("握手通道通知开启失败:", e);
+        }
+
+        // 2. 注入启动激活包并开启常驻心跳
+        await sendRawBytes([0x55, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        startHeartbeat();
+
         statusBadge.classList.add("connected");
-        statusText.innerText = "已认主 · 在线";
+        statusText.innerText = "已认主 · 就绪";
         btnConnect.innerText = "已连上小蜗牛 (" + bleDevice.name + ")";
         btnConnect.style.background = "#2ecc71";
         
@@ -459,27 +500,49 @@
     });
 
     function onDisconnected() {
+      stopHeartbeat();
       statusBadge.classList.remove("connected");
       statusText.innerText = "已断开";
       btnConnect.innerText = "重新连上小蜗牛";
       btnConnect.style.background = "var(--primary)";
       txChar = null;
+      rxChar = null;
     }
 
-    // 官方 7 字节原装发包
-    async function sendCommand(opcode, mode, intensity) {
+    // 工业级防拥堵发包队列 (解决 GATT_BUSY)
+    async function sendRawBytes(hexArray) {
       if (!txChar) return;
+      if (isWriting) {
+        pendingWrite = hexArray;
+        return;
+      }
+      isWriting = true;
       try {
-        // [0x55, opcode, 0x00, 0x00, mode, intensity, 0x00]
-        const hex = [0x55, opcode, 0x00, 0x00, mode, intensity, 0x00];
-        const bytes = new Uint8Array(hex);
-        await txChar.writeValueWithoutResponse(bytes);
+        const bytes = new Uint8Array(hexArray);
+        if (txChar.writeValueWithoutResponse) {
+          await txChar.writeValueWithoutResponse(bytes);
+        } else {
+          await txChar.writeValue(bytes);
+        }
       } catch (e) {
         console.error("发送失败:", e);
+      } finally {
+        isWriting = false;
+        if (pendingWrite) {
+          const next = pendingWrite;
+          pendingWrite = null;
+          sendRawBytes(next);
+        }
       }
     }
 
-    // 急停按钮：三个通道同时发送官方停止包 (mode=0, intensity=0)
+    // 官方 7 字节控制帧
+    async function sendCommand(opcode, mode, intensity) {
+      const hex = [0x55, opcode, 0x00, 0x00, mode, intensity, 0x00];
+      await sendRawBytes(hex);
+    }
+
+    // 急停
     btnEmergencyStop.addEventListener("click", async () => {
       state.suck.on = false;
       state.flap.on = false;
