@@ -48,7 +48,7 @@
     .connected .status-dot { background: #2ecc71; box-shadow: 0 0 8px #2ecc71; }
     .connected { color: #2ecc71; }
 
-    /* 紧急制动按键 */
+    /* 紧急制动 */
     .emergency-btn {
       width: 100%;
       padding: 18px;
@@ -72,7 +72,7 @@
       transform: scale(0.97);
     }
 
-    /* 控制卡片 */
+    /* 模块卡片 */
     .card {
       background: var(--card);
       border: 1px solid var(--card-border);
@@ -115,7 +115,7 @@
     input:checked + .slider { background-color: var(--primary); }
     input:checked + .slider:before { transform: translateX(22px); }
 
-    /* 模式胶囊按键 */
+    /* 档位选择胶囊 */
     .modes-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -140,7 +140,7 @@
       box-shadow: 0 0 10px var(--primary-glow);
     }
 
-    /* 滑动条 */
+    /* 强度滑动条 */
     .intensity-wrap {
       display: flex;
       align-items: center;
@@ -172,7 +172,7 @@
       color: var(--primary);
     }
 
-    /* 底部连接浮动栏 */
+    /* 连接浮动栏 */
     .connect-bar {
       position: fixed;
       bottom: 16px;
@@ -251,4 +251,210 @@
     </div>
     <div class="modes-grid" id="modesFlap">
       <div class="mode-btn active" data-mode="1">模式 1</div>
-      <div class="mode
+      <div class="mode-btn" data-mode="2">模式 2</div>
+      <div class="mode-btn" data-mode="3">模式 3</div>
+      <div class="mode-btn" data-mode="4">模式 4</div>
+      <div class="mode-btn" data-mode="5">模式 5</div>
+      <div class="mode-btn" data-mode="6">模式 6</div>
+      <div class="mode-btn" data-mode="7">模式 7</div>
+      <div class="mode-btn" data-mode="8">模式 8</div>
+    </div>
+    <div class="intensity-wrap">
+      <span style="font-size:0.8rem; color:var(--text-muted)">强度</span>
+      <input type="range" min="10" max="100" value="50" class="intensity-slider" id="slFlap">
+      <span class="intensity-val" id="valFlap">50%</span>
+    </div>
+  </div>
+
+  <!-- 3. 振动模块 (Vibrate) -->
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">⚡ 全体振动 (Vibrate)</div>
+        <div class="card-sub">深层共振 · 酥麻触电蔓延</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="swVibe">
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="modes-grid" id="modesVibe" style="grid-template-columns: repeat(5, 1fr);">
+      <div class="mode-btn active" data-mode="1">1</div>
+      <div class="mode-btn" data-mode="2">2</div>
+      <div class="mode-btn" data-mode="3">3</div>
+      <div class="mode-btn" data-mode="4">4</div>
+      <div class="mode-btn" data-mode="5">5</div>
+      <div class="mode-btn" data-mode="6">6</div>
+      <div class="mode-btn" data-mode="7">7</div>
+      <div class="mode-btn" data-mode="8">8</div>
+      <div class="mode-btn" data-mode="9">9</div>
+    </div>
+    <div class="intensity-wrap">
+      <span style="font-size:0.8rem; color:var(--text-muted)">强度</span>
+      <input type="range" min="10" max="100" value="30" class="intensity-slider" id="slVibe">
+      <span class="intensity-val" id="valVibe">30%</span>
+    </div>
+  </div>
+
+  <!-- 底部连接栏 -->
+  <div class="connect-bar">
+    <button id="btnConnect" class="connect-btn">🔗 连上我的小蜗牛 (ZX650A)</button>
+  </div>
+
+  <script>
+    const FFE0_SERVICE = "0000ffe0-0000-1000-8000-00805f9b34fb";
+    const FFE1_CHAR = "0000ffe1-0000-1000-8000-00805f9b34fb";
+
+    let bleDevice = null;
+    let bleServer = null;
+    let txChar = null;
+
+    let state = {
+      suck: { on: false, mode: 1, intensity: 40 },
+      flap: { on: false, mode: 1, intensity: 50 },
+      vibe: { on: false, mode: 1, intensity: 30 }
+    };
+
+    const statusBadge = document.getElementById("statusBadge");
+    const statusText = document.getElementById("statusText");
+    const btnConnect = document.getElementById("btnConnect");
+    const btnEmergencyStop = document.getElementById("btnEmergencyStop");
+
+    // 蓝牙连接
+    btnConnect.addEventListener("click", async () => {
+      try {
+        statusText.innerText = "正在寻找小蜗牛...";
+        bleDevice = await navigator.bluetooth.requestDevice({
+          filters: [
+            { namePrefix: "ZX650" },
+            { namePrefix: "ZEMALIA" },
+            { services: [FFE0_SERVICE] }
+          ],
+          optionalServices: [FFE0_SERVICE, "0000ae00-0000-1000-8000-00805f9b34fb"]
+        });
+
+        statusText.innerText = "正在握手...";
+        bleServer = await bleDevice.gatt.connect();
+        const service = await bleServer.getPrimaryService(FFE0_SERVICE);
+        txChar = await service.getCharacteristic(FFE1_CHAR);
+
+        statusBadge.classList.add("connected");
+        statusText.innerText = "已认主 · 在线";
+        btnConnect.innerText = "已连上小蜗牛 (" + bleDevice.name + ")";
+        btnConnect.style.background = "#2ecc71";
+        
+        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+      } catch (err) {
+        console.error("连接失败:", err);
+        statusText.innerText = "未连接";
+        alert("连接提示: " + err.message);
+      }
+    });
+
+    function onDisconnected() {
+      statusBadge.classList.remove("connected");
+      statusText.innerText = "已断开";
+      btnConnect.innerText = "重新连上小蜗牛";
+      btnConnect.style.background = "var(--primary)";
+      txChar = null;
+    }
+
+    // 核心发包
+    async function sendCommand(motorId, mode, intensity) {
+      if (!txChar) return;
+      try {
+        const hex = [motorId, 0x04, mode, intensity, 0x00];
+        const bytes = new Uint8Array(hex);
+        await txChar.writeValueWithoutResponse(bytes);
+      } catch (e) {
+        console.error("发送失败:", e);
+      }
+    }
+
+    // 急停
+    btnEmergencyStop.addEventListener("click", async () => {
+      state.suck.on = false;
+      state.flap.on = false;
+      state.vibe.on = false;
+      document.getElementById("swSuck").checked = false;
+      document.getElementById("swFlap").checked = false;
+      document.getElementById("swVibe").checked = false;
+      
+      if (txChar) {
+        await sendCommand(0x55, 0, 0);
+        await sendCommand(0x56, 0, 0);
+        await sendCommand(0x57, 0, 0);
+      }
+      if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+    });
+
+    // 绑定各事件
+    document.getElementById("swSuck").addEventListener("change", (e) => {
+      state.suck.on = e.target.checked;
+      updateMotor("suck");
+    });
+    document.getElementById("slSuck").addEventListener("input", (e) => {
+      state.suck.intensity = parseInt(e.target.value);
+      document.getElementById("valSuck").innerText = state.suck.intensity + "%";
+      if (state.suck.on) updateMotor("suck");
+    });
+    bindModes("modesSuck", (m) => {
+      state.suck.mode = m;
+      if (state.suck.on) updateMotor("suck");
+    });
+
+    document.getElementById("swFlap").addEventListener("change", (e) => {
+      state.flap.on = e.target.checked;
+      updateMotor("flap");
+    });
+    document.getElementById("slFlap").addEventListener("input", (e) => {
+      state.flap.intensity = parseInt(e.target.value);
+      document.getElementById("valFlap").innerText = state.flap.intensity + "%";
+      if (state.flap.on) updateMotor("flap");
+    });
+    bindModes("modesFlap", (m) => {
+      state.flap.mode = m;
+      if (state.flap.on) updateMotor("flap");
+    });
+
+    document.getElementById("swVibe").addEventListener("change", (e) => {
+      state.vibe.on = e.target.checked;
+      updateMotor("vibe");
+    });
+    document.getElementById("slVibe").addEventListener("input", (e) => {
+      state.vibe.intensity = parseInt(e.target.value);
+      document.getElementById("valVibe").innerText = state.vibe.intensity + "%";
+      if (state.vibe.on) updateMotor("vibe");
+    });
+    bindModes("modesVibe", (m) => {
+      state.vibe.mode = m;
+      if (state.vibe.on) updateMotor("vibe");
+    });
+
+    function bindModes(containerId, cb) {
+      const container = document.getElementById(containerId);
+      container.querySelectorAll(".mode-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          container.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
+          btn.classList.add("active");
+          cb(parseInt(btn.dataset.mode));
+        });
+      });
+    }
+
+    async function updateMotor(type) {
+      if (!txChar) return;
+      const s = state[type];
+      let motorId = 0x55;
+      if (type === "suck") motorId = 0x56;
+      if (type === "flap") motorId = 0x57;
+
+      if (!s.on) {
+        await sendCommand(motorId, 0, 0);
+      } else {
+        await sendCommand(motorId, s.mode, s.intensity);
+      }
+    }
+  </script>
+</body>
+</html>
