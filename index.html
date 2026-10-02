@@ -285,7 +285,7 @@
     🛑 一键急停 · 暂停全部
   </button>
 
-  <!-- 1. 吮吸模块 (Suck) -->
+  <!-- 1. 吮吸模块 (Suck, opcode: 0x09) -->
   <div class="card">
     <div class="card-header">
       <div>
@@ -314,7 +314,7 @@
     </div>
   </div>
 
-  <!-- 2. 拍打模块 (Flap) -->
+  <!-- 2. 拍打模块 (Flap, opcode: 0x07) -->
   <div class="card">
     <div class="card-header">
       <div>
@@ -343,7 +343,7 @@
     </div>
   </div>
 
-  <!-- 3. 振动模块 (Vibrate) -->
+  <!-- 3. 振动模块 (Vibrate, opcode: 0x03) -->
   <div class="card">
     <div class="card-header">
       <div>
@@ -400,7 +400,16 @@
       }
     });
 
-    // ================= 2. 蓝牙硬件驱动 =================
+    // ================= 2. 原厂满血蓝牙指令 (反编译 Dalvik 字节码真身) =================
+    // 官方协议格式：严格 7 字节！
+    // 帧结构: [0x55, Opcode, 0x00, 0x00, Mode, Intensity, 0x00]
+    // 振动 Opcode: 0x03
+    // 拍打 Opcode: 0x07
+    // 吮吸 Opcode: 0x09
+    const OP_VIBE = 0x03;
+    const OP_FLAP = 0x07;
+    const OP_SUCK = 0x09;
+
     const FFE0_SERVICE = "0000ffe0-0000-1000-8000-00805f9b34fb";
     const FFE1_CHAR = "0000ffe1-0000-1000-8000-00805f9b34fb";
 
@@ -457,11 +466,12 @@
       txChar = null;
     }
 
-    // 核心发包：满血破译原厂 5 字节指令 [motorId, 0x04, mode, 0x7F, intensity]
-    async function sendCommand(motorId, mode, intensity) {
+    // 官方 7 字节原装发包
+    async function sendCommand(opcode, mode, intensity) {
       if (!txChar) return;
       try {
-        const hex = [motorId, 0x04, mode, 0x7F, intensity];
+        // [0x55, opcode, 0x00, 0x00, mode, intensity, 0x00]
+        const hex = [0x55, opcode, 0x00, 0x00, mode, intensity, 0x00];
         const bytes = new Uint8Array(hex);
         await txChar.writeValueWithoutResponse(bytes);
       } catch (e) {
@@ -469,7 +479,7 @@
       }
     }
 
-    // 急停按钮：全通道瞬间拉零
+    // 急停按钮：三个通道同时发送官方停止包 (mode=0, intensity=0)
     btnEmergencyStop.addEventListener("click", async () => {
       state.suck.on = false;
       state.flap.on = false;
@@ -479,13 +489,14 @@
       document.getElementById("swVibe").checked = false;
       
       if (txChar) {
-        await sendCommand(0x55, 0, 0);
-        await sendCommand(0x56, 0, 0);
-        await sendCommand(0x57, 0, 0);
+        await sendCommand(OP_SUCK, 0, 0);
+        await sendCommand(OP_FLAP, 0, 0);
+        await sendCommand(OP_VIBE, 0, 0);
       }
       if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
     });
 
+    // 1. 吮吸事件
     document.getElementById("swSuck").addEventListener("change", (e) => {
       state.suck.on = e.target.checked;
       updateMotor("suck");
@@ -500,6 +511,7 @@
       if (state.suck.on) updateMotor("suck");
     });
 
+    // 2. 拍打事件
     document.getElementById("swFlap").addEventListener("change", (e) => {
       state.flap.on = e.target.checked;
       updateMotor("flap");
@@ -514,6 +526,7 @@
       if (state.flap.on) updateMotor("flap");
     });
 
+    // 3. 振动事件
     document.getElementById("swVibe").addEventListener("change", (e) => {
       state.vibe.on = e.target.checked;
       updateMotor("vibe");
@@ -542,14 +555,14 @@
     async function updateMotor(type) {
       if (!txChar) return;
       const s = state[type];
-      let motorId = 0x55;
-      if (type === "suck") motorId = 0x56;
-      if (type === "flap") motorId = 0x57;
+      let opcode = OP_VIBE;
+      if (type === "suck") opcode = OP_SUCK;
+      if (type === "flap") opcode = OP_FLAP;
 
       if (!s.on) {
-        await sendCommand(motorId, s.mode, 0);
+        await sendCommand(opcode, 0, 0);
       } else {
-        await sendCommand(motorId, s.mode, s.intensity);
+        await sendCommand(opcode, s.mode, s.intensity);
       }
     }
   </script>
